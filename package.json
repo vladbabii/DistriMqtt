@@ -1,0 +1,10 @@
+{
+  "name": "DistriMqtt",
+  "description": "Distributed MQTT Service based",
+  "author": "Vlad Babii <vlad@babii.ro>",
+  "dependencies": {
+    "mosca": "2.0.2",
+    "mqtt": "1.14.0",
+    "winston": "^2.2.0"
+  }
+}

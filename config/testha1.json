@@ -1,0 +1,28 @@
+{
+  "mqtt": {
+     "host": "127.0.0.11"
+    ,"port": 1883
+  }
+  ,"http":{
+     "host": "127.0.0.11"
+    ,"port": 6883
+  }
+  ,"storage":{
+    "delay" : 2000
+  }
+  ,"mqttpeer": {
+     "host": "127.0.0.11"
+    ,"port": 10883
+  }
+  ,"peers": {
+      "idprefix" : "PeerX"
+     ,"prefix"   : "peer/"
+  }
+  ,"peerlist": [ "testha1", "testha2", "testha3", "testha4" ]
+  ,"storage": {
+     "type"     : "redis"
+    ,"host"     : "127.0.0.1"
+    ,"port"     : 6379
+    ,"database" : 1
+  }
+}
