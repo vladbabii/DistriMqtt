@@ -91,9 +91,9 @@ function PeerClientPublished(packet,client){
         info.client_id = client.id;
     }
 
-    if(info.topic=='cmd/sync'){
+    if((info.client_id!="false" && info.client_id!=false) && info.topic=='cmd/sync'){
         startTime=parseInt(info.payload);
-        setImmediate(function(StartOfTime){
+        setImmediate(function(StartOfTime,info){
             L.og('info','Resync storage with '+info.client_id+' since '+StartOfTime+'');
             clientid=info.client_id.substring(Config.peers.idprefix.length);
             for(i in Storage){
@@ -109,7 +109,34 @@ function PeerClientPublished(packet,client){
                     }, clientid,i);
                 }
             }
-        },startTime);
+        },startTime,info);
+        return ;
+    }
+
+    if(info.client_id!=false && info.topic.substring(0,10)=='will/peer/'){
+        try {
+            data = JSON.parse(info.payload);
+        }catch(this_exception){
+            L.og('error','Could not parse payload to json')
+        }
+        if(typeof(data)!='object'){
+            return ;
+        }
+        L.og('info','PeerWillRecv>',data);
+        if(typeof(PeerWills[info.client_id])=='undefined'){
+            PeerWills[info.client_id]=[];
+            L.og('info','Initialized will storage for '+info.client_id);
+        }
+        var topic;
+        topic=data.topic;
+        if(data.retain=="true"){
+            data.retain=true;
+        }
+        if(data.retain=="false"){
+            data.retain=false;
+        }
+        delete(data.topic);
+        PeerWills[info.client_id][topic]=data;
         return ;
     }
 
@@ -136,6 +163,34 @@ function PeerClientConnected(client) {
 }
 function PeerClientDisconnected(client) {
     L.og('info', 'Peer-',{client_id:client.id});
+
+    if(typeof(PeerWills[client.id])!='undefined') {
+        L.og('info','Dumping will storage for '+client.id);
+        for(topic in PeerWills[client.id]){
+            item = {
+                  topic     : topic
+                , payload   : PeerWills[client.id][topic].payload
+                , qos       : PeerWills[client.id][topic].qos
+                , retain    : PeerWills[client.id][topic].retain
+            };
+            if(item.retain==true){
+                Storage[topic]={
+                      payload   : PeerWills[client.id][topic].payload
+                    , qos       : PeerWills[client.id][topic].qos
+                    , ts        : Date.now()
+                    , client_id : "will"
+                };
+                console.log("-----");
+                console.log(Storage[topic]);
+                console.log("-----");
+                StorageDirty=true;
+            }
+            //console.log(item);
+            MqttServer.publish(item);
+        }
+        delete(PeerWills[client.id]);
+    }
+
 }
 var PeerServer = new mosca.Server(MqttPeerServerSettings);
 PeerServer.on('ready'               ,PeerServerReady);
@@ -147,6 +202,8 @@ const mqtt = require('mqtt');
 
 PeerConfig={};
 PeerConnection={};
+PeerWills={};
+LocalWills={};
 PeerLastSync={};  /* TODO : save lasy sync with a peer */
 function ConnectPeers(){
     for(i in Config.peerlist){
@@ -168,7 +225,7 @@ function ConnectPeers(){
                            ConfigurePeerConnection(Config.peerlist[peer]);
                         });
                     }else{
-                        console.error('Could not convert to json the config for peer '+Config.peerlist[peer]);
+                        L.og('error','Could not convert to json the config for peer '+Config.peerlist[peer]);
                     }
                 });
             },i);
@@ -239,6 +296,17 @@ function PeerConnectionSendToall(info){
     }
 }
 
+function PeerConnectionSendToallWill(info){
+    subtopic='will/';
+    str=JSON.stringify(info);
+    for(index in PeerConnection){
+        setImmediate(function(i,suffix){
+            PeerConnection[i].publish(suffix+PeerConfig[i].peers.prefix+Current.Name,str);
+            L.og('debug','PeerWillSent '+i,str);
+        },index,subtopic)
+    }
+}
+
 function SyncStorage(peer,data,doStore){
     L.og('info','Resync from '+peer+' with doStore=',doStore,' data is ',data);
     try {
@@ -277,7 +345,7 @@ function SyncStorage(peer,data,doStore){
         }
 
         if(Storage[topic].ts > jdata.ts){
-            L.og('debug','Resync '+jdata.packet_id+' from '+peer+' had older ts, ignoring');
+            L.og('debug','Resync '+jdata.packet_id+' from '+peer+' had older ts, ignoring currentts='+Storage[topic].ts+' incomingts='+jdata.ts);
             return ;
         }
 
@@ -382,9 +450,12 @@ function MqttServerLoadStorage(){
             , qos       : Storage[i].qos
             , retain    : true
         };
-        MqttServer.publish(item);
+        setImmediate(function(itm){
+            MqttServer.publish(itm);
+        },item);
     }
     L.og('info','Loaded '+counter+' retained topics');
+    /*console.log(Storage);*/
 }
 function MqttServerSaveToStorage(info){
     L.og('info','Saving to storage',{packet_id:info.packet_id,ts:info.ts});
@@ -396,10 +467,14 @@ function MqttServerSaveToStorage(info){
     /*console.log(MqttServer.persistence.db);*/
 }
 function MqttClientPublished(packet,client){
-    if(typeof(client)=='undefined' || typeof(client.id)=='undefined'){
+    /*if(typeof(client)=='undefined' || typeof(client.id)=='undefined'){
+        console.log('nc',packet);
+        console.log('nc',client);
         return ;
-    }
+    }*/
     if(typeof(packet.topic)!='undefined' && packet.topic.substring(0,5)=='$SYS/'){
+        //console.log('sy',packet);
+        //console.log('sy',client);
         return ;
     }
     info={};
@@ -417,10 +492,12 @@ function MqttClientPublished(packet,client){
     }
 
     if(info.retain==true){
-        setImmediate(function(data){
-            data.ts=ts = Date.now();
-            MqttServerSaveToStorage(data);
-        },info);
+        if(typeof(client)!='undefined') {
+            setImmediate(function (data, cl) {
+                data.ts = ts = Date.now();
+                MqttServerSaveToStorage(data);
+            }, info, client);
+        }
     }else{
         if(typeof(Storage[info.topic])!='undefined'){
             delete(Storage[info.topic]);
@@ -434,6 +511,25 @@ function MqttClientPublished(packet,client){
 }
 function MqttClientConnected(client) {
     L.og('info', 'Client+',{client_id:client.id});
+    if(typeof(client.will)!='undefined'){
+        willInfo={
+            topic: client.will.topic
+            ,payload: client.will.payload.toString()
+            ,qos: client.will.qos
+            ,retain: client.will.retain
+            ,clientid: client.id
+            ,ts : Date.now()
+        };
+        L.og('info','ClientWill '+client.id,willInfo);
+        if(
+            typeof(client.will)=='object'
+            && typeof(client.will.topic)!='undefined'
+            && typeof(client.will.payload)!='undefined'
+        ){
+            PeerConnectionSendToallWill(willInfo);
+        }
+    }
+
 }
 function MqttClientDisconnected(client) {
     L.og('info', 'Client-',{client_id:client.id});
