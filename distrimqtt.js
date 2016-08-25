@@ -122,7 +122,7 @@ function PeerClientPublished(packet,client){
         if(typeof(data)!='object'){
             return ;
         }
-        L.og('info','PeerWillRecv>',data);
+        L.og('info','PeerWillRecv '+info.client_id+'>',data);
         if(typeof(PeerWills[info.client_id])=='undefined'){
             PeerWills[info.client_id]=[];
             L.og('info','Initialized will storage for '+info.client_id);
@@ -203,7 +203,7 @@ const mqtt = require('mqtt');
 PeerConfig={};
 PeerConnection={};
 PeerWills={};
-LocalWills={};
+CurrentWills={};
 PeerLastSync={};  /* TODO : save lasy sync with a peer */
 function ConnectPeers(){
     for(i in Config.peerlist){
@@ -526,12 +526,14 @@ function MqttClientConnected(client) {
             && typeof(client.will.topic)!='undefined'
             && typeof(client.will.payload)!='undefined'
         ){
+            CurrentWills[client.id]=willInfo;
             PeerConnectionSendToallWill(willInfo);
         }
     }
 
 }
 function MqttClientDisconnected(client) {
+    delete(CurrentWills[client.id]);
     L.og('info', 'Client-',{client_id:client.id});
 }
 var MqttServer = new mosca.Server(MqttServerSettings);
