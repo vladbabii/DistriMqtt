@@ -95,20 +95,31 @@ function PeerClientPublished(packet,client){
         startTime=parseInt(info.payload);
         setImmediate(function(StartOfTime,info){
             L.og('info','Resync storage with '+info.client_id+' since '+StartOfTime+'');
-            clientid=info.client_id.substring(Config.peers.idprefix.length);
-            for(i in Storage){
-                L.og('debug','Sending '+i+' to '+info.client_id);
-                if(Storage[i].ts > StartOfTime) {
-                    setImmediate(function (tci,index) {
-                        send=Storage[index];
-                        send.topic=index;
-                        PeerServer.publish({
-                             topic  : Config.peers.prefix + tci + '/resync'
-                            ,payload: JSON.stringify(send)
-                        });
-                    }, clientid,i);
+            /*var clientid;
+            clientid=info.client_id.substring(Config.peers.idprefix.length);*/
+            var index;
+            index=0;
+            var resync = MqttServer.persistence.db.createReadStream();
+            resync.on('data',function(data){
+                data.type='put';
+                try {
+                    data.value.payload = data.value.payload.toString();
+                    index++;
+                    L.og('debug','Sending '+index+' to '+info.client_id);
+                    tci=clientid=info.client_id.substring(Config.peers.idprefix.length);
+                    var xi={
+                         topic      :  Config.peers.prefix + tci + '/resync'
+                        ,payload    :  JSON.stringify(data)
+                    };
+                    //console.log(xi);
+                    PeerServer.publish(xi);
+                }catch(conversionexception){
+                    L.og('error',conversionexception);
                 }
-            }
+            });
+            resync.on('close',function(){
+                L.og('debug','Resync with '+info.client_id+' completed');
+            });
         },startTime,info);
         return ;
     }
@@ -123,6 +134,9 @@ function PeerClientPublished(packet,client){
             return ;
         }
         L.og('info','PeerWillRecv '+info.client_id+'>',data);
+        console.log('#####################');
+        console.log(info);
+        console.log('#####################');
         if(typeof(PeerWills[info.client_id])=='undefined'){
             PeerWills[info.client_id]=[];
             L.og('info','Initialized will storage for '+info.client_id);
@@ -160,6 +174,14 @@ function PeerClientPublished(packet,client){
 }
 function PeerClientConnected(client) {
     L.og('info', 'Peer+',{client_id:client.id});
+
+    cid=client.id.substring(Config.peers.idprefix.length);
+    for(i in CurrentWills){
+        setImmediate(function(xcid,xi){
+            PeerConnectionSendAWill(xcid,CurrentWills[xi]);
+        },cid,i);
+    }
+
 }
 function PeerClientDisconnected(client) {
     L.og('info', 'Peer-',{client_id:client.id});
@@ -173,19 +195,6 @@ function PeerClientDisconnected(client) {
                 , qos       : PeerWills[client.id][topic].qos
                 , retain    : PeerWills[client.id][topic].retain
             };
-            if(item.retain==true){
-                Storage[topic]={
-                      payload   : PeerWills[client.id][topic].payload
-                    , qos       : PeerWills[client.id][topic].qos
-                    , ts        : Date.now()
-                    , client_id : "will"
-                };
-                console.log("-----");
-                console.log(Storage[topic]);
-                console.log("-----");
-                StorageDirty=true;
-            }
-            //console.log(item);
             MqttServer.publish(item);
         }
         delete(PeerWills[client.id]);
@@ -272,9 +281,9 @@ function ConfigurePeerConnection(index){
 
         /* resync from remote peer */
         if(topic==PeerConfig[this.PeerIndex].peers.prefix+Current.Name+'/resync'){
-            setImmediate(function(peerID){
-                SyncStorage(peerID,message.toString(),true);
-            },this.PeerIndex);
+            setImmediate(function(peerID,xmessage){
+                SyncStorage(peerID,xmessage.toString(),true);
+            },this.PeerIndex,message);
             return ;
         }
 
@@ -303,10 +312,42 @@ function PeerConnectionSendToallWill(info){
         setImmediate(function(i,suffix){
             PeerConnection[i].publish(suffix+PeerConfig[i].peers.prefix+Current.Name,str);
             L.og('debug','PeerWillSent '+i,str);
-        },index,subtopic)
+        },index,subtopic);
+    }
+}
+function PeerConnectionSendAWill(id,will){
+    subtopic='will/';
+    setImmediate(function(i,suffix,xwill){
+        str=JSON.stringify(xwill);
+        PeerConnection[i].publish(suffix+PeerConfig[i].peers.prefix+Current.Name,str);
+        L.og('debug','PeerWillSent '+i,str);
+    },index,subtopic,will);
+}
+
+
+NextSetTs=[];
+
+function SyncStoragePublish(jdata){
+    if(jdata.value.retain==true) {
+        NextSetTs[jdata.value.topic + '|' + jdata.value.payload + '|' + jdata.value.qos + '|' + jdata.value.retain] = jdata.value.ts;
+    }
+    MqttServer.publish({
+        topic     : jdata.value.topic
+        , payload   : jdata.value.payload
+        , qos       : jdata.value.qos
+        , retain    : jdata.value.retain
+        , ts        : jdata.value.ts
+    });
+    if(jdata.value.retain==true) {
+        setImmediate(function (delkey) {
+            setTimeout(function () {
+                delete(NextSetTs[delkey]);
+            }, 5000);
+        }, jdata.value.topic + jdata.value.payload + jdata.value.qos + jdata.value.retain);
     }
 }
 
+/** @TODO : Sync Storage **/
 function SyncStorage(peer,data,doStore){
     L.og('info','Resync from '+peer+' with doStore=',doStore,' data is ',data);
     try {
@@ -314,102 +355,136 @@ function SyncStorage(peer,data,doStore){
     }catch(this_exception){
         jdata=false;
     }
-    if(typeof(jdata)=='object') {
-        topic=jdata.topic;
-        delete(jdata.topic);
 
-        if(doStore==false){
-            setImmediate(function(t,j) {
-                MqttServer.publish({
-                    topic: topic
-                    , payload: jdata.payload
-                    , qos: jdata.qos
-                });
-            },topic,jdata);
-            if(typeof(Storage[topic])!='undefined'){
-                delete(Storage[topic]);
-                StorageDirty=true;
-            }
-            L.og('debug','Resync '+jdata.packet_id+' from '+peer+' was resolved as live');
-            return ;
-        }
+    if(
+        typeof(jdata.value)=='undefined'
+        && typeof(jdata.topic)!='undefined'
+        && typeof(jdata.payload)!='undefined'
+        && typeof(jdata.qos)!='undefined'
+        && typeof(jdata.retain)!='undefined'
+        && typeof(jdata.ts)!='undefined'
+    ){
+        jdata = {
+            key     : jdata.topic
+          , value   : jdata
+        };
+    }
 
-        if(typeof(Storage[topic])=='undefined'){
-            Storage[topic]=jdata;
-            StorageDirty=true;
-            L.og('debug','Resync '+jdata.packet_id+' from '+peer+' was resolved as new data');
-            //setImmediate(function(){
-               MqttServerRepublish(topic);
-            //});
-            return ;
-        }
+    if(
+        typeof(jdata)=='object'
+        && typeof(jdata.key)!='undefined'
+        && typeof(jdata.value.topic)!=false
+        && typeof(jdata.value.payload)!=false
+        && typeof(jdata.value.qos)!=false
+        && typeof(jdata.value.retain)!=false
+        && typeof(jdata.value.ts)!=false
+    ) {
+        MqttServer.persistence.db.get(jdata.key,function(err,value){
 
-        if(Storage[topic].ts > jdata.ts){
-            L.og('debug','Resync '+jdata.packet_id+' from '+peer+' had older ts, ignoring currentts='+Storage[topic].ts+' incomingts='+jdata.ts);
-            return ;
-        }
-
-        var fields=["payload","qos","ts","client_id","packet_id"];
-        var diff=[];
-        var needRepublish=false;
-        for(i in fields){
-            if(Storage[topic][fields[i]] != jdata[fields[i]]){
-                diff.push(fields[i]);
-                if(
-                    needRepublish == false
-                    && (
-                        fields[i]== "payload"
-                        || fields[i]== "qos"
-                    )
-                ){
-                 needRepublish=true;
-                }
-            }
-        }
-        if(diff.length>0){
-            Storage[topic]=jdata;
-            StorageDirty=true;
-            if(needRepublish==false){
-                L.og('debug','Resync '+jdata.packet_id+' from '+peer+' was partial newer, not republishing');
+            /*console.log('------------------');console.log(jdata);
+            console.log('--vs--');console.log(err);console.log(value);*/
+            if(typeof(err)!='undefined' && err!=null){
+                setImmediate(function(somedata,per){
+                    SyncStoragePublish(somedata);
+                    L.og('debug','Resync '+somedata.packet_id+' from '+per+' was resolved as new data');
+                },jdata,peer);
                 return ;
             }
-        }
-        if(needRepublish){
-            setImmediate(function(){
-                MqttServerRepublish(topic);
-            });
-            L.og('debug','Resync '+jdata.packet_id+' from '+peer+' was much newer, republishing');
-            return ;
-        }
 
-        L.og('debug','Resync '+jdata.packet_id+' from '+peer+' was resolved as old data, ignoring');
+            if(jdata.value.ts < value.payload.ts){
+                L.og('info','Resync '+jdata.packet_id+' from '+peer+' was resolved as older, ignoring');
+                return ;
+            }
+
+            if(
+                   jdata.value.payload.toString() != value.payload.toString()
+                || jdata.value.qos != value.qos
+                || jdata.value.retain != value.retain
+            ){
+                setImmediate(function(somedata,per) {
+                    SyncStoragePublish(somedata);
+                    L.og('info', 'Resync ' + somedata.packet_id + ' from ' + per + ' was resolved as newer data, with publish');
+                },jdata,peer);
+                return ;
+            }
+
+            if(
+                jdata.value.payload.toString() == value.payload.toString()
+                && jdata.value.qos == value.qos
+                && jdata.value.retain == value.retain
+            ) {
+                L.og('info','Resync '+jdata.packet_id+' from '+peer+' was resolved as ~identical');
+                return ;
+            }
+
+            L.og('info','Resync '+jdata.packet_id+' from '+peer+' was resolved as UNKNOWN');
+        });
     }
 }
 
+function GetConfigStorageDelay(){
+    return Config.storage.delay;
+}
 
 StorageDirty=false;
-StorageFilePath='storage/'+Current.Name+'.json';
-try {
-    Storage = JSON.parse(fs.readFileSync(StorageFilePath, 'utf8'));
-}catch(ectp){
-    Storage= {};
-}
-StorageSaveTimer=setTimeout(StorageSave,Config.storage.delay);
-function StorageSave(){
-    if(StorageDirty==false){
-        StorageSaveTimer = setTimeout(StorageSave,Config.storage.delay);
-        return ;
-    }
-    L.og('info','Saving storage to file');
-    fs.writeFile(StorageFilePath,JSON.stringify(Storage),"utf8",function(){
+StorageDumpFilePath='storage/'+Current.Name+'.ldb.json';
+StorageDumpFilePathOld='storage/'+Current.Name+'.ldb.old.json';
+
+function MqttServerDBSave(cb){
+    var rs = MqttServer.persistence.db.createReadStream();
+    var datadump=[];
+    rs.on('data',function(data){
+        data.type='put';
+        try {
+            data.value.payload = data.value.payload.toString();
+        }catch(conversionexception){
+            L.og('error',conversionexception);
+        }
+        datadump.push(
+            data
+        );
+    });
+    rs.on('close',function(){
         StorageDirty=false;
-        StorageSaveInterval = setTimeout(StorageSave,Config.storage.delay);
+        fs.unlink(StorageDumpFilePathOld,function(){
+            fs.rename(StorageDumpFilePath, StorageDumpFilePathOld, function() {
+                fs.writeFile(StorageDumpFilePath, JSON.stringify(datadump), "utf8", function () {
+                    L.og('info', 'Done writing leveldb to file');
+                    if (typeof(cb) !== 'undefined') {
+                        cb();
+                    }
+                });
+            });
+        });
     });
 }
 
+function MqttServerDBLoad(){
+    try {
+        var jsraw = JSON.parse(fs.readFileSync(StorageDumpFilePath, 'utf8'));
+    }catch(ecpt){
+        L.og('error','Could not convert file '+StorageDumpFilePath+' to json');
+        return ;
+    }
+    MqttServer.persistence.db.batch(jsraw);
+    L.og('debug','Loaded '+jsraw.length+' items from file to memory');
+ }
 
+StorageSaveTimer=setTimeout(StorageSave,GetConfigStorageDelay());
 
-
+function StorageSave(){
+    if(StorageDirty==false){
+        StorageSaveTimer = setTimeout(StorageSave,GetConfigStorageDelay());
+        return ;
+    }
+    L.og('info','Saving memory storage to file');
+    setImmediate(function(){
+        MqttServerDBSave(function(){
+            StorageDirty=false;
+            StorageSaveInterval = setTimeout(StorageSave,GetConfigStorageDelay());
+        });
+    });
+ }
 
 L.og('info','Starting Mqtt Server');
 try{
@@ -431,52 +506,62 @@ try{
 }
 
 function MqttServerReady(){
+    /**
+     * Inject timestamp into the packet being saved to use later for solving packet comparison
+     * after network-split heals and on resync
+     *
+     * Also mark storage for saving with StorageDirty=true
+     **/
+    MqttServer.persistence._original_storeRetained=MqttServer.persistence.storeRetained;
+    MqttServer.persistence.storeRetained=function(packet,cb){
+
+        /**
+         * message id is not needed.. yet?
+         */
+        delete(packet.messageId);
+
+        /**
+         * Payload is useful as string
+         */
+        try {
+            packet.payload = packet.payload.toString();
+        }catch(conversion_error){
+            L.og('error','Conversion error ',coversion_error);
+        }
+
+        /**
+         * If packet to be saved does not have ts, then look up the preset TS if it exists
+         * if not set current timestamp
+         */
+        if(typeof(packet.ts)=='undefined') {
+            key = packet.topic +'|'+ packet.payload +'|'+ packet.qos +'|'+ packet.retain;
+            if(typeof(NextSetTs[key])!='undefined'){
+                packet.ts=NextSetTs[key];
+                delete(NextSetTs[key]);
+            }else{
+                packet.ts = Date.now();
+            }
+        }
+
+        StorageDirty=true;
+        return MqttServer.persistence._original_storeRetained(packet,cb);
+    };
+
     L.og('info','Mqtt server ready on ',{tcp:MqttServerSettings.host+':'+MqttServerSettings.port,http:MqttServerSettings.http.host+':'+MqttServerSettings.http.port});
     L.og('info','Loading saved messages into memory');
-    //setImmediate(function(){
-       MqttServerLoadStorage();
-    //});
+    MqttServerDBLoad();
     setImmediate(function(){
        ConnectPeers();
     });
 }
-function MqttServerLoadStorage(){
-    counter=0;
-    for(i in Storage){
-        counter++;
-        item = {
-              topic     : i
-            , payload   : Storage[i].payload
-            , qos       : Storage[i].qos
-            , retain    : true
-        };
-        setImmediate(function(itm){
-            MqttServer.publish(itm);
-        },item);
-    }
-    L.og('info','Loaded '+counter+' retained topics');
-    /*console.log(Storage);*/
-}
-function MqttServerSaveToStorage(info){
-    L.og('info','Saving to storage',{packet_id:info.packet_id,ts:info.ts});
-    topic=info.topic;
-    delete(info.topic);
-    delete(info.retain);
-    Storage[topic]=info;
-    StorageDirty=true;
-    /*console.log(MqttServer.persistence.db);*/
-}
+
 function MqttClientPublished(packet,client){
-    /*if(typeof(client)=='undefined' || typeof(client.id)=='undefined'){
-        console.log('nc',packet);
-        console.log('nc',client);
-        return ;
-    }*/
     if(typeof(packet.topic)!='undefined' && packet.topic.substring(0,5)=='$SYS/'){
-        //console.log('sy',packet);
-        //console.log('sy',client);
         return ;
     }
+    /**
+     * @TODO remove info and L.og(...,'info') or use flag to dump information about received packets
+     */
     info={};
     info.client_id  = false;
     info.packet_id  = packet.messageId;
@@ -485,30 +570,57 @@ function MqttClientPublished(packet,client){
     info.qos        = packet.qos;
     info.retain     = packet.retain;
 
-    if(typeof(client)!='undefined'){
+
+    /**
+     * If client is not set then it's published by this broker and this broker should know when to broadcast and when
+     * not to so, skip it
+     */
+    /* @TODO : setImmediate */
+    if(typeof(client)!='undefined' && client!=false && info.retain==false){
+        info.client_id = client.id;
+        info.ts = Date.now();
         setImmediate(function(data){
             PeerConnectionSendToall(data);
         },info);
+
+
+        /**
+         *  Delete retained topics that are no longer retained
+         */
+        MqttServer.persistence.db.del('!retained!'+info.topic,function(err) {
+            if (typeof(err) == 'undefined' || err == null) {
+                StorageDirty=true;
+                console.log('!!!!!');
+            }
+            console.log(err);
+        });
     }
 
-    if(info.retain==true){
-        if(typeof(client)!='undefined') {
-            setImmediate(function (data, cl) {
-                data.ts = ts = Date.now();
-                MqttServerSaveToStorage(data);
-            }, info, client);
-        }
-    }else{
-        if(typeof(Storage[info.topic])!='undefined'){
-            delete(Storage[info.topic]);
-            StorageDirty=true;
-        }
+    /**
+     * If it's retained, then it's already in memory, and we should get the item from there before sending it
+     * so it has the same timestamp; this means a bit of delay before sending but less sync traffic in the end
+     * and data should match as much as possible
+     */
+    /* @TODO : setImmediate */
+    if(typeof(client)!='undefined' && client!=false && info.retain==true){
+        MqttServer.persistence.db.get('!retained!'+info.topic,function(err,value){
+            if(typeof(err)=='undefined' || err==null){
+                try {
+                    value.payload  = value.payload.toString();
+                }catch(conversionerror){ }
+                PeerConnectionSendToall({
+                     key    : '!retained!'+value.topic
+                    ,value: value
+                });
+            }else {
+                PeerConnectionSendToall(info);
+            }
+        });
     }
-    if(typeof(client)!='undefined'){
-        info.client_id = client.id;
-    }
-    L.og('info','Client>',info);
+
+    L.og('verbose','Client>',info);
 }
+
 function MqttClientConnected(client) {
     L.og('info', 'Client+',{client_id:client.id});
     if(typeof(client.will)!='undefined'){
@@ -545,10 +657,12 @@ MqttServer.on('clientDisconnected'  ,MqttClientDisconnected);
 
 function MqttServerRepublish(topic){
     L.og('debug','Republishing '+topic);
-    MqttServer.publish({
-         topic      : topic
-        ,payload    : Storage[topic].payload
-        ,qos        : Storage[topic].qos
-        ,retain     : true
+    MqttServer.persistence.db.get('!retained!'+topic,function(err,value){
+        MqttServer.publish({
+            topic       : value.topic
+            ,payload    : value.payload
+            ,qos        : value.qos
+            ,retain     : true
+        });
     });
 }
