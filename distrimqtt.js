@@ -381,18 +381,16 @@ function SyncStorage(peer,data,doStore){
     ) {
         MqttServer.persistence.db.get(jdata.key,function(err,value){
 
-            /*console.log('------------------');console.log(jdata);
-            console.log('--vs--');console.log(err);console.log(value);*/
             if(typeof(err)!='undefined' && err!=null){
                 setImmediate(function(somedata,per){
                     SyncStoragePublish(somedata);
-                    L.og('debug','Resync '+somedata.packet_id+' from '+per+' was resolved as new data');
+                    L.og('debug','Resync '+somedata.value.topic+' from '+per+' was resolved as new data');
                 },jdata,peer);
                 return ;
             }
 
             if(jdata.value.ts < value.payload.ts){
-                L.og('info','Resync '+jdata.packet_id+' from '+peer+' was resolved as older, ignoring');
+                L.og('info','Resync '+jdata.value.topic+' from '+peer+' was resolved as older, ignoring');
                 return ;
             }
 
@@ -403,7 +401,7 @@ function SyncStorage(peer,data,doStore){
             ){
                 setImmediate(function(somedata,per) {
                     SyncStoragePublish(somedata);
-                    L.og('info', 'Resync ' + somedata.packet_id + ' from ' + per + ' was resolved as newer data, with publish');
+                    L.og('info', 'Resync ' + somedata.value.topic + ' from ' + per + ' was resolved as newer data, with publish');
                 },jdata,peer);
                 return ;
             }
@@ -413,11 +411,11 @@ function SyncStorage(peer,data,doStore){
                 && jdata.value.qos == value.qos
                 && jdata.value.retain == value.retain
             ) {
-                L.og('info','Resync '+jdata.packet_id+' from '+peer+' was resolved as ~identical');
+                L.og('info','Resync '+jdata.value.topic+' from '+peer+' was resolved as ~identical');
                 return ;
             }
 
-            L.og('info','Resync '+jdata.packet_id+' from '+peer+' was resolved as UNKNOWN');
+            L.og('info','Resync '+jdata.value.topic+' from '+peer+' was resolved as UNKNOWN');
         });
     }
 }
@@ -590,9 +588,9 @@ function MqttClientPublished(packet,client){
         MqttServer.persistence.db.del('!retained!'+info.topic,function(err) {
             if (typeof(err) == 'undefined' || err == null) {
                 StorageDirty=true;
-                console.log('!!!!!');
+                //console.log('!!!!!');
             }
-            console.log(err);
+            //console.log(err);
         });
     }
 
@@ -653,7 +651,6 @@ MqttServer.on('ready'               ,MqttServerReady);
 MqttServer.on('published'           ,MqttClientPublished);
 MqttServer.on('clientConnected'     ,MqttClientConnected);
 MqttServer.on('clientDisconnected'  ,MqttClientDisconnected);
-
 
 function MqttServerRepublish(topic){
     L.og('debug','Republishing '+topic);
