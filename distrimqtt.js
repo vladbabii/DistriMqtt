@@ -587,8 +587,10 @@ function MqttClientPublished(packet,client){
          */
         MqttServer.persistence.db.del('!retained!'+info.topic,function(err) {
             if (typeof(err) == 'undefined' || err == null) {
-                StorageDirty=true;
+                //StorageDirty=true;
                 //console.log('!!!!!');
+            }else{
+                StorageDirty=true;
             }
             //console.log(err);
         });
