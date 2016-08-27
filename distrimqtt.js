@@ -118,7 +118,12 @@ try{
 }
 
 if(typeof(Config.pidfile)=='string'){
-
+    try {
+        fs.writeFileSync(Config.pidfile, process.pid, "utf8");
+    }catch(pidfileissue){
+        L.og('error','Could not write pid to '+Config.pidfile);
+        process.exit(1);
+    }
 }
 
 try{
@@ -697,6 +702,8 @@ function StorageSave(){
         }, GetConfigStorageDelay());
     },StorageDirty);
  }
+
+
 
 L.og('info','Starting Mqtt Server');
 try{
