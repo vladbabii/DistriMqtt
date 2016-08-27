@@ -95,8 +95,6 @@ function PeerClientPublished(packet,client){
         startTime=parseInt(info.payload);
         setImmediate(function(StartOfTime,info){
             L.og('info','Resync storage with '+info.client_id+' since '+StartOfTime+'');
-            /*var clientid;
-            clientid=info.client_id.substring(Config.peers.idprefix.length);*/
             var index;
             index=0;
             var resync = MqttServer.persistence.db.createReadStream();
@@ -111,7 +109,6 @@ function PeerClientPublished(packet,client){
                          topic      :  Config.peers.prefix + tci + '/resync'
                         ,payload    :  JSON.stringify(data)
                     };
-                    //console.log(xi);
                     PeerServer.publish(xi);
                 }catch(conversionexception){
                     L.og('error',conversionexception);
@@ -134,9 +131,6 @@ function PeerClientPublished(packet,client){
             return ;
         }
         L.og('info','PeerWillRecv '+info.client_id+'>',data);
-        console.log('#####################');
-        console.log(info);
-        console.log('#####################');
         if(typeof(PeerWills[info.client_id])=='undefined'){
             PeerWills[info.client_id]=[];
             L.og('info','Initialized will storage for '+info.client_id);
@@ -213,6 +207,7 @@ PeerConfig={};
 PeerConnection={};
 PeerWills={};
 CurrentWills={};
+CurrentWillsDirty=false;
 PeerLastSync={};  /* TODO : save lasy sync with a peer */
 function ConnectPeers(){
     for(i in Config.peerlist){
@@ -446,15 +441,35 @@ function MqttServerDBSave(cb){
     var rs = MqttServer.persistence.db.createReadStream();
     var datadump=[];
     rs.on('data',function(data){
-        data.type='put';
+        delete(data.type);
         try {
             data.value.payload = data.value.payload.toString();
         }catch(conversionexception){
             L.og('error',conversionexception);
         }
-        datadump.push(
-            data
-        );
+
+        /**
+         * If there is a will for this topic, then we should save the file to prepare for restart
+         * The timestamp will be 0, so any peer with newer data will be able to override it without issues
+         */
+        for(j in CurrentWills){
+            console.log(CurrentWills[j].topic,'?',data.value.topic);
+            if(CurrentWills[j].topic == data.value.topic){
+                data.value.ts       = 0;
+                data.value.payload  = CurrentWills[j].payload;
+                data.value.qos      = CurrentWills[j].qos;
+                data.value.retain   = CurrentWills[j].retain;
+            }
+        }
+
+        /**
+         * check retain if it has been overriden by a will
+         */
+        if(data.value.retain==true){
+            datadump.push(
+                data
+            );
+        }
     });
     rs.on('close',function(){
         StorageDirty=false;
@@ -477,6 +492,9 @@ function MqttServerDBLoad(){
     }catch(ecpt){
         L.og('error','Could not convert file '+StorageDumpFilePath+' to json');
         return ;
+    }
+    for(i in jsraw){
+        jsraw[i].type='put';
     }
     MqttServer.persistence.db.batch(jsraw);
     L.og('debug','Loaded '+jsraw.length+' items from file to memory');
@@ -529,6 +547,7 @@ function MqttServerReady(){
 
         /**
          * message id is not needed.. yet?
+         * lower storage requirements
          */
         delete(packet.messageId);
 
@@ -652,6 +671,7 @@ function MqttClientConnected(client) {
             && typeof(client.will.payload)!='undefined'
         ){
             CurrentWills[client.id]=willInfo;
+            CurrentWillsDirty=true;
             PeerConnectionSendToallWill(willInfo);
         }
     }
