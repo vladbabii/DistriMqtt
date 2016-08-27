@@ -452,13 +452,15 @@ function MqttServerDBSave(cb){
          * If there is a will for this topic, then we should save the file to prepare for restart
          * The timestamp will be 0, so any peer with newer data will be able to override it without issues
          */
+        //console.log('????',data.value);
         for(j in CurrentWills){
-            console.log(CurrentWills[j].topic,'?',data.value.topic);
+            //console.log(CurrentWills[j].topic,'?',data.value.topic);
             if(CurrentWills[j].topic == data.value.topic){
-                data.value.ts       = 0;
                 data.value.payload  = CurrentWills[j].payload;
                 data.value.qos      = CurrentWills[j].qos;
                 data.value.retain   = CurrentWills[j].retain;
+                /* Write optimization: Don't write ts if it should be zero */
+                delete(data.value.ts);
             }
         }
 
@@ -466,6 +468,9 @@ function MqttServerDBSave(cb){
          * check retain if it has been overriden by a will
          */
         if(data.value.retain==true){
+            /* Write optimization: retained messages always have retain=true */
+            delete(data.value.retain);
+            //console.log('++++',data.value);
             datadump.push(
                 data
             );
@@ -473,6 +478,58 @@ function MqttServerDBSave(cb){
     });
     rs.on('close',function(){
         StorageDirty=false;
+
+        if(datadump.length==0){
+            /** Don't bother optimizing / encoding if we have no data **/
+            fs.unlink(StorageDumpFilePathOld,function(){
+                fs.rename(StorageDumpFilePath, StorageDumpFilePathOld, function() {
+                    fs.writeFile(StorageDumpFilePath, '[]', "utf8", function () {
+                        L.og('info', 'Done writing empty leveldb to file');
+                        if (typeof(cb) !== 'undefined') {
+                            cb();
+                        }
+                    });
+                });
+            });
+            return ;
+        }
+
+        /**
+         * Write optimization: get minimum ts (except undefined) and write it first in the file
+         * it should save a couple of characters in the end
+         */
+        var min;
+        min=false;
+        for(i in datadump){
+            if(typeof(datadump[i].value.ts)=='number' && datadump[i].value.ts==0) {
+                delete(datadump[i]['value']['ts']);
+            }
+            if(typeof(datadump[i].value.ts)!='undefined' && (min==false || datadump[i].value.ts<min)){
+                min=datadump[i].value.ts;
+            }
+            if(typeof(datadump[i].value.qos)!='undefined' && datadump[i].value.qos==0){
+                delete(datadump[i].value.qos);
+            }
+            if(
+                typeof(datadump[i].key)=='string'
+                && typeof(datadump[i].value.topic)=='string'
+                && datadump[i].key == '!retained!'+datadump[i].value.topic
+            ){
+                delete(datadump[i].value.topic);
+                datadump[i].key=datadump[i].key.substring(10);
+            };
+        }
+        for(i in datadump){
+            if(typeof(datadump[i].value.ts)=='number'){
+                datadump[i].value.ts-=min;
+            }
+        }
+        if(min==false){ min=0; }
+        datadump.unshift({
+            saveoptions   : true
+            , mints         : min
+        });
+
         fs.unlink(StorageDumpFilePathOld,function(){
             fs.rename(StorageDumpFilePath, StorageDumpFilePathOld, function() {
                 fs.writeFile(StorageDumpFilePath, JSON.stringify(datadump), "utf8", function () {
@@ -490,11 +547,46 @@ function MqttServerDBLoad(){
     try {
         var jsraw = JSON.parse(fs.readFileSync(StorageDumpFilePath, 'utf8'));
     }catch(ecpt){
-        L.og('error','Could not convert file '+StorageDumpFilePath+' to json');
-        return ;
+        L.og('error','Could not convert file '+StorageDumpFilePath+' to json, trying to load old file');
+        //L.og('error',ecpt);
+        try{
+            var jsraw = JSON.parse(fs.readFileSync(StorageDumpFilePathOld, 'utf8'));
+        }catch(ecpt){
+            L.og('error','Could not convert file '+StorageDumpFilePathOld+' to json, abandoning load');
+            //L.og('error',ecpt);
+            return ;
+        }
+    }
+
+    /* Some write optimizations undo-ing to get back the same data structure as before save */
+
+    var opts={
+        mints: 0
+    };
+
+    if(typeof(jsraw[0].saveoptions)!='undefined'){
+        loaded = jsraw.shift();
+        if(typeof(loaded.mints)!='undefined'){
+            opts.mints = loaded.mints;
+        }
     }
     for(i in jsraw){
         jsraw[i].type='put';
+        if(typeof(jsraw[i].value.topic)!='string'){
+            jsraw[i].value.topic = jsraw[i].key;
+            jsraw[i].key = '!retained!'+jsraw[i].key;
+        }
+        if(typeof(jsraw[i].value.qos)=='undefined'){
+            jsraw[i].value.qos=0;
+        }
+        if(typeof(jsraw[i].value.retain)=='undefined'){
+            jsraw[i].value.retain=true;
+        }
+        if(typeof(jsraw[i].value.ts)=='undefined'){
+            jsraw[i].value.ts=0;
+        }else{
+            jsraw[i].value.ts+=opts.mints;
+        }
     }
     MqttServer.persistence.db.batch(jsraw);
     L.og('debug','Loaded '+jsraw.length+' items from file to memory');
@@ -508,12 +600,12 @@ function StorageSave(){
         return ;
     }
     L.og('info','Saving memory storage to file');
-    setImmediate(function(){
+    setTimeout(function(){
         MqttServerDBSave(function(){
             StorageDirty=false;
             StorageSaveInterval = setTimeout(StorageSave,GetConfigStorageDelay());
         });
-    });
+    },GetConfigStorageDelay());
  }
 
 L.og('info','Starting Mqtt Server');
