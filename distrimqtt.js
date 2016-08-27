@@ -117,6 +117,10 @@ try{
     process.exit(1);
 }
 
+if(typeof(Config.pidfile)=='string'){
+
+}
+
 try{
     const mosca = require('mosca');
 }catch(this_exception){
@@ -269,8 +273,6 @@ PeerConfig={};
 PeerConnection={};
 PeerWills={};
 CurrentWills={};
-CurrentWillsDirty=false;
-PeerLastSync={};  /* TODO : save lasy sync with a peer */
 function ConnectPeers(){
     for(i in Config.peerlist){
         if(Config.peerlist[i]!=Current.Name) {
@@ -355,10 +357,14 @@ function PeerConnectionSendToall(info){
     }
     str=JSON.stringify(info);
     for(index in PeerConnection){
-        setImmediate(function(i,suffix){
-            PeerConnection[i].publish(suffix+PeerConfig[i].peers.prefix+Current.Name,str);
-            L.og('debug','PeerSent '+i,str);
-        },index,subtopic)
+        if(PeerConnection[index].connected) {
+            setImmediate(function (i, suffix) {
+                if (PeerConnection[i].connected) {
+                    PeerConnection[i].publish(suffix + PeerConfig[i].peers.prefix + Current.Name, str);
+                    L.og('debug', 'PeerSent ' + i, str);
+                }
+            }, index, subtopic)
+        }
     }
 }
 
@@ -366,10 +372,14 @@ function PeerConnectionSendToallWill(info){
     subtopic='will/';
     str=JSON.stringify(info);
     for(index in PeerConnection){
-        setImmediate(function(i,suffix){
-            PeerConnection[i].publish(suffix+PeerConfig[i].peers.prefix+Current.Name,str);
-            L.og('debug','PeerWillSent '+i,str);
-        },index,subtopic);
+        if(PeerConnection[index].connected) {
+            setImmediate(function (i, suffix) {
+                if (PeerConnection[i].connected) {
+                    PeerConnection[i].publish(suffix + PeerConfig[i].peers.prefix + Current.Name, str);
+                    L.og('debug', 'PeerWillSent ' + i, str);
+                }
+            }, index, subtopic);
+        }
     }
 }
 function PeerConnectionSendAWill(id,will){
@@ -410,7 +420,7 @@ function SyncStoragePublish(jdata){
             if(typeof(err)!='undefined' && err==null && typeof(value.topic)!='undefined') {
                 L.og('info','Deleting prior retained information at '+value.topic);
                 MqttServer.persistence.db.del('!retained!'+value.topic,function(err) {
-                    StorageDirty=true;
+                    StorageSetDirty();
                 });
             }
         });
@@ -507,7 +517,11 @@ function GetConfigStorageDelay(){
     return delay;
 }
 
-StorageDirty=false;
+function StorageSetDirty(){
+    StorageDirty++;
+}
+
+StorageDirty=0;
 StorageDumpFilePath='storage/'+Current.Name+'.ldb.json';
 StorageDumpFilePathOld='storage/'+Current.Name+'.ldb.old.json';
 
@@ -668,17 +682,20 @@ function MqttServerDBLoad(){
 StorageSaveTimer=setTimeout(StorageSave,GetConfigStorageDelay());
 
 function StorageSave(){
-    if(StorageDirty==false){
+    if(StorageDirty<0){ StorageDirty=0; }
+    if(StorageDirty==0){
         StorageSaveTimer = setTimeout(StorageSave,GetConfigStorageDelay());
         return ;
     }
-    L.og('info','Saving memory storage to file');
-    setTimeout(function(){
-        MqttServerDBSave(function(){
-            StorageDirty=false;
-            StorageSaveInterval = setTimeout(StorageSave,GetConfigStorageDelay());
-        });
-    },GetConfigStorageDelay());
+    setImmediate(function(dirtied) {
+        L.og('info', 'Saving memory storage to file ('+dirtied+')');
+        setTimeout(function () {
+            MqttServerDBSave(function () {
+                StorageDirty -= dirtied;
+                StorageSaveInterval = setTimeout(StorageSave, GetConfigStorageDelay());
+            });
+        }, GetConfigStorageDelay());
+    },StorageDirty);
  }
 
 L.og('info','Starting Mqtt Server');
@@ -739,7 +756,7 @@ function MqttServerReady(){
             }
         }
 
-        StorageDirty=true;
+        StorageSetDirty();
         return MqttServer.persistence._original_storeRetained(packet,cb);
     };
 
@@ -787,7 +804,7 @@ function MqttClientPublished(packet,client){
             if(typeof(err)!='undefined' && err==null && typeof(value.topic)!='undefined') {
                 L.og('info','Deleting prior retained information at '+info.topic);
                 MqttServer.persistence.db.del('!retained!'+value.topic,function(err) {
-                    StorageDirty=true;
+                    StorageSetDirty();
                 });
             }
          });
@@ -835,7 +852,6 @@ function MqttClientConnected(client) {
             && typeof(client.will.payload)!='undefined'
         ){
             CurrentWills[client.id]=willInfo;
-            CurrentWillsDirty=true;
             PeerConnectionSendToallWill(willInfo);
         }
     }
