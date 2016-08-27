@@ -1,3 +1,8 @@
+/**
+ * DistriMqtt
+ * Distributed MQTT service in nodejs based on mosca and mqtt
+ * @repository https://github.com/vladbabii/DistriMqtt
+ */
 const
      winston        = require('winston')
     ,fs             = require('fs')
@@ -8,7 +13,41 @@ var Current = {};
 var Config = {};
 var L = {};
 L.og=winston.log;
+winston.remove(winston.transports.Console);
+winston.add(winston.transports.Console, {
+     colorize       : true
+    ,timestamp      : function(){
+           var date = new Date();
+
+           var hour = date.getHours();
+           hour = (hour < 10 ? "0" : "") + hour;
+
+           var min  = date.getMinutes();
+           min = (min < 10 ? "0" : "") + min;
+
+           var sec  = date.getSeconds();
+           sec = (sec < 10 ? "0" : "") + sec;
+
+           var year = date.getFullYear();
+
+           var month = date.getMonth() + 1;
+           month = (month < 10 ? "0" : "") + month;
+
+           var day  = date.getDate();
+           day = (day < 10 ? "0" : "") + day;
+
+
+           ms = Date.now().toString();
+           ms = ms.substring( ms.length-4 );
+
+           return year + ":" + month + ":" + day + ":" + hour + ":" + min + ":" + sec + ':' + ms + ' - ' + Current.Name;
+       }
+});
 winston.level = 'debug';
+
+function showHelp(){
+    console.log('DistriMqtt v 0.0.1');
+};
 
 process.argv.forEach(function (val, index, array) {
     if(val.substring(0,1)=='-'){
@@ -19,11 +58,29 @@ process.argv.forEach(function (val, index, array) {
             option = val.substring(1,eq);
             var value;
             value  = val.substring(eq+1);
+            while(option.length>1 && option.substring(0,1)=='-'){
+                option=option.substring(1);
+            }
             switch(option){
+                case 'level':
+                    winston.level = value;
+                    break;
+
+                case 'help':
+                    showHelp();
+                    process.exit(0);
+                    break;
+
                 case 'name':
                     value=value.trim();
                     Current.Name=value;
                     L.og('info','Config',{NodeName:value});
+                    break;
+
+                case 'config':
+                    value=value.trim();
+                    ConfigFilePath=value;
+                    L.og('info','Config',{ConfigFilePath:value});
                     break;
 
                 default:
@@ -40,8 +97,13 @@ if(typeof(Current.Name)=='undefined'){
 }
 
 
+/**
+ * Config file path can be overriden with --config
+ */
 L.og('info','Reading config file');
-ConfigFilePath='config/'+Current.Name+'.json';
+if(typeof(ConfigFilePath)=='undefined') {
+    ConfigFilePath = 'config/' + Current.Name + '.json';
+}
 try{
     ConfigData=fs.readFileSync(ConfigFilePath);
 }catch(ectp){
@@ -462,16 +524,15 @@ function MqttServerDBSave(cb){
 
         /**
          * If there is a will for this topic, then we should save the file to prepare for restart
-         * The timestamp will be 0, so any peer with newer data will be able to override it without issues
+         * The timestamp will be null, so any peer with newer data will be able to override it without issues
+         * Since we want to write as small of a data as possible, we delete timestamp instead of nulling
          */
-        //console.log('????',data.value);
         for(j in CurrentWills){
-            //console.log(CurrentWills[j].topic,'?',data.value.topic);
             if(CurrentWills[j].topic == data.value.topic){
                 data.value.payload  = CurrentWills[j].payload;
                 data.value.qos      = CurrentWills[j].qos;
                 data.value.retain   = CurrentWills[j].retain;
-                /* Write optimization: Don't write ts if it should be zero */
+                /* Write optimization: Don't write ts if it should be null */
                 delete(data.value.ts);
             }
         }
@@ -482,7 +543,6 @@ function MqttServerDBSave(cb){
         if(data.value.retain==true){
             /* Write optimization: retained messages always have retain=true */
             delete(data.value.retain);
-            //console.log('++++',data.value);
             datadump.push(
                 data
             );
@@ -570,7 +630,8 @@ function MqttServerDBLoad(){
         }
     }
 
-    /* Some write optimizations undo-ing to get back the same data structure as before save */
+    /* Some write optimizations undo-ing to get back the same data structure as before save optimizations */
+    /* TODO : add a flag for save optimization */
 
     var opts={
         mints: 0
