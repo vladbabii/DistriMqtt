@@ -344,6 +344,20 @@ function SyncStoragePublish(jdata){
                 delete(NextSetTs[delkey]);
             }, 5000);
         }, jdata.value.topic + jdata.value.payload + jdata.value.qos + jdata.value.retain);
+    }else{
+
+        /**
+         *  Delete retained topics that are no longer retained
+         */
+        MqttServer.persistence.db.get('!retained!'+jdata.value.topic,function(err,value) {
+            if(typeof(err)!='undefined' && err==null && typeof(value.topic)!='undefined') {
+                L.og('info','Deleting prior retained information at '+value.topic);
+                MqttServer.persistence.db.del('!retained!'+value.topic,function(err) {
+                    StorageDirty=true;
+                });
+            }
+        });
+
     }
 }
 
@@ -379,7 +393,7 @@ function SyncStorage(peer,data,doStore){
         && typeof(jdata.value.retain)!=false
         && typeof(jdata.value.ts)!=false
     ) {
-        MqttServer.persistence.db.get(jdata.key,function(err,value){
+        MqttServer.persistence.db.get('!retained!'+jdata.key,function(err,value){
 
             if(typeof(err)!='undefined' && err!=null){
                 setImmediate(function(somedata,per){
@@ -585,15 +599,14 @@ function MqttClientPublished(packet,client){
         /**
          *  Delete retained topics that are no longer retained
          */
-        MqttServer.persistence.db.del('!retained!'+info.topic,function(err) {
-            if (typeof(err) == 'undefined' || err == null) {
-                //StorageDirty=true;
-                //console.log('!!!!!');
-            }else{
-                StorageDirty=true;
+         MqttServer.persistence.db.get('!retained!'+info.topic,function(err,value) {
+            if(typeof(err)!='undefined' && err==null && typeof(value.topic)!='undefined') {
+                L.og('info','Deleting prior retained information at '+info.topic);
+                MqttServer.persistence.db.del('!retained!'+value.topic,function(err) {
+                    StorageDirty=true;
+                });
             }
-            //console.log(err);
-        });
+         });
     }
 
     /**
