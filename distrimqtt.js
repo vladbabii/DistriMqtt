@@ -430,7 +430,19 @@ function SyncStorage(peer,data,doStore){
 }
 
 function GetConfigStorageDelay(){
-    return Config.storage.delay;
+    var delay=1000;
+    if(typeof(Config.storage.delay)=='numeric'){
+        delay=Config.storage.delay;
+    }
+    if(
+           typeof(Config.storage.delay_min)!='undefined'
+        && typeof(Config.storage.delay_max)!='undefined'
+    ) {
+        delay = Math.floor(
+                    Math.random() * (Config.storage.delay_max - Config.storage.delay_min) + Config.storage.delay_min
+                    );
+    }
+    return delay;
 }
 
 StorageDirty=false;
@@ -741,7 +753,6 @@ function MqttClientPublished(packet,client){
             }
         });
     }
-
     L.og('verbose','Client>',info);
 }
 
@@ -778,15 +789,3 @@ MqttServer.on('ready'               ,MqttServerReady);
 MqttServer.on('published'           ,MqttClientPublished);
 MqttServer.on('clientConnected'     ,MqttClientConnected);
 MqttServer.on('clientDisconnected'  ,MqttClientDisconnected);
-
-function MqttServerRepublish(topic){
-    L.og('debug','Republishing '+topic);
-    MqttServer.persistence.db.get('!retained!'+topic,function(err,value){
-        MqttServer.publish({
-            topic       : value.topic
-            ,payload    : value.payload
-            ,qos        : value.qos
-            ,retain     : true
-        });
-    });
-}
