@@ -548,12 +548,12 @@ function MqttServerDBLoad(){
         var jsraw = JSON.parse(fs.readFileSync(StorageDumpFilePath, 'utf8'));
     }catch(ecpt){
         L.og('error','Could not convert file '+StorageDumpFilePath+' to json, trying to load old file');
-        //L.og('error',ecpt);
+        L.og('error',JSON.stringify(ecpt));
         try{
             var jsraw = JSON.parse(fs.readFileSync(StorageDumpFilePathOld, 'utf8'));
         }catch(ecpt){
             L.og('error','Could not convert file '+StorageDumpFilePathOld+' to json, abandoning load');
-            //L.og('error',ecpt);
+            L.og('error',JSON.stringify(ecpt));
             return ;
         }
     }
